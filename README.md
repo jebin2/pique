@@ -1,5 +1,7 @@
 # pique
 
+![pique in action: Super+Shift+L peeks a link, then searches highlighted text](docs/demo.webp)
+
 ![pique peeking at a page](docs/screenshot.png)
 
 **The peek browser for Omarchy: look at a link without paying for it with a tab.**
