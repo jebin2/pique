@@ -14,14 +14,25 @@ pique brings that to Hyprland as one small floating window:
 
 ## Install
 
-On Omarchy (or any Arch system running Hyprland):
+On Omarchy (or any Arch system running Hyprland), install the release package:
 
-    omarchy pkg aur add pique
+    sudo pacman -U https://github.com/jebin2/pique/releases/download/v0.1.0/pique-0.1.0-1-x86_64.pkg.tar.zst
 
-That's all. The package sets everything up for you: the two peek shortcuts in
+pacman pulls in the Qt libraries it needs from the Arch repositories.
+
+Or build that same release from source yourself:
+
+    git clone https://github.com/jebin2/pique
+    cd pique/aur
+    makepkg -si
+
+Either way the package sets everything up for you: the two peek shortcuts in
 your Hyprland config, a rule that makes the peek window float, and a small
 extension for Brave and Chromium. **Restart your browser once** so it loads the
 extension.
+
+pique will be on the AUR (`omarchy pkg aur add pique`) as soon as AUR account
+registration reopens.
 
 ## Use
 
@@ -73,7 +84,7 @@ again.
 
     bin/build     # qmake6 + make into build/pique and build/pique-watch
     bin/test      # offscreen Qt Test run
-    bin/install   # build the package with makepkg and install it (the same setup as the AUR package)
+    bin/install   # build this checkout into a package and install it
 
 ## Notes
 

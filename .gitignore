@@ -4,3 +4,6 @@
 *.pkg.tar.*
 /scratch/
 /bin/__pycache__/
+/aur/src/
+/aur/pkg/
+/aur/*.tar.gz
