@@ -1,0 +1,323 @@
+#!/usr/bin/env python3
+# Super+Shift+L and Super+Shift+click: peek what is under the pointer, or
+# what is selected right now. A link or a selected address opens; other
+# selected text waits in the search bar (Enter searches it); nothing: an
+# empty search bar.
+#
+# Where "right now" comes from:
+# - Brave, Chromium and pique itself answer from their own page: this sends
+#   the window key code 196 (F18 to the page) and waits for the answer.
+# - Apps on the accessibility bus (GTK and Qt apps, e.g. omawrite) are asked
+#   for the link at the pointer and their current selection.
+# - Anything else (terminals): what was highlighted there. Wayland has one
+#   highlighted-text buffer: it keeps text after it is unhighlighted, and a
+#   highlight elsewhere replaces it while the first window still shows its
+#   own. So a watcher (/usr/lib/pique/pique-watch, started by the Hyprland
+#   block) keeps each window's last highlight in memory, and a plain click in
+#   that window (which unhighlights it) makes it forget.
+# The clipboard is never read, so nothing copied leaks into a peek.
+
+import json
+import os
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import time
+
+ADDRESS = re.compile(r"^(https?://|file:|www\.)\S+$")
+# Windows that answer the F18 question from their own page.
+ANSWERERS = re.compile(r"^(brave-browser|chromium|Chromium|pique)$")
+ANSWER_WAIT = 0.8  # seconds for the extension to answer before falling back
+
+
+def pique_program():
+    if os.access("/usr/bin/pique", os.X_OK):
+        return "/usr/bin/pique"
+    return shutil.which("pique") or "pique"
+
+
+def hand_to_spare(args):
+    """A pique --standby waits hidden, already started; handing it the
+    arguments opens the peek at once. False when there is none (or another
+    launch just took it): then start pique the slow way."""
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if not runtime:
+        return False
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(1.5)
+            s.connect(os.path.join(runtime, "pique-standby"))
+            s.sendall((json.dumps(args) + "\n").encode("utf-8"))
+            return s.makefile("rb").readline().strip() == b"ok"
+    except (OSError, ValueError):
+        return False
+
+
+def launch_pique(args):
+    if hand_to_spare(args):
+        return
+    # The address or highlighted text goes in the environment, which only
+    # this user can read, not on the command line, which every account can.
+    env = dict(os.environ, PIQUE_LAUNCH=json.dumps(args))
+    subprocess.Popen([pique_program()], env=env, start_new_session=True,
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def hyprctl_json(*args):
+    return json.loads(subprocess.check_output(["hyprctl", *args, "-j"], text=True, timeout=2))
+
+
+def window_under_pointer():
+    """(client, x, y): the window the pointer is over and the pointer's
+    position inside it, or None."""
+    pos = hyprctl_json("cursorpos")
+    px, py = int(pos["x"]), int(pos["y"])
+    workspaces = {m["activeWorkspace"]["id"] for m in hyprctl_json("monitors")}
+    under = []
+    for client in hyprctl_json("clients"):
+        if not client.get("mapped") or client.get("hidden"):
+            continue
+        if client["workspace"]["id"] not in workspaces and not client.get("pinned"):
+            continue
+        (x, y), (w, h) = client["at"], client["size"]
+        if x <= px < x + w and y <= py < y + h:
+            under.append(client)
+    if not under:
+        return None
+    # Floating windows sit above tiled ones; then the most recently focused.
+    top = min(under, key=lambda c: (not c.get("floating"), c.get("focusHistoryID", 1 << 30)))
+    return top, px - top["at"][0], py - top["at"][1]
+
+
+def answer_file():
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    return os.path.join(runtime, "pique-answered") if runtime else None
+
+
+def answered(client, x, y):
+    """Ask the window (browser extension, or pique); True once it has
+    answered (and so started pique itself). The key goes by its code: a key name is
+    looked up at the level of the modifiers held, and Super+Shift is still
+    down while this runs."""
+    path = answer_file()
+    if not path:
+        return False
+    asked = time.time()
+    if client.get("class") == "pique":
+        # pique can't tell where the pointer is in its page by itself.
+        try:
+            old = os.umask(0o077)
+            try:
+                with open(os.path.join(os.path.dirname(path), "pique-ask"), "w", encoding="utf-8") as f:
+                    json.dump({"x": x, "y": y, "at": asked}, f)
+            finally:
+                os.umask(old)
+        except OSError:
+            pass
+    # Keys only reach a page in the focused window, and after a peek closes
+    # the focus may be somewhere else. The pointer is on this window anyway.
+    # A focus dispatch also moves the pointer to the window's middle, off the
+    # link, so it goes straight back.
+    try:
+        if hyprctl_json("activewindow").get("address") != client["address"]:
+            px, py = client["at"][0] + x, client["at"][1] + y
+            subprocess.run(["hyprctl", "--batch",
+                            'dispatch hl.dsp.focus({ window = "address:%s" }) ; dispatch hl.dsp.cursor.move({ x = %d, y = %d })'
+                            % (client["address"], px, py)],
+                           capture_output=True, timeout=2, check=False)
+            time.sleep(0.1)
+    except Exception:
+        pass
+    subprocess.run(["hyprctl", "dispatch",
+                    'hl.dsp.send_shortcut({ mods = "", key = "code:196", window = "address:%s" })' % client["address"]],
+                   capture_output=True, timeout=2, check=False)
+    while time.time() - asked < ANSWER_WAIT:
+        try:
+            if os.stat(path).st_mtime >= asked - 0.05:
+                return True
+        except OSError:
+            pass
+        time.sleep(0.03)
+    return False
+
+
+def usable(uri):
+    uri = (uri or "").strip()
+    if not uri or uri.startswith("javascript:"):
+        return None
+    return uri
+
+
+def hyperlink_uri(node):
+    for get in (lambda: node.get_hyperlink(), lambda: node.get_hypertext().get_link(0)):
+        try:
+            link = get()
+            if link is not None and link.get_n_anchors() > 0:
+                uri = usable(link.get_uri(0))
+                if uri:
+                    return uri
+        except Exception:
+            pass
+    return None
+
+
+def atspi():
+    try:
+        import gi
+
+        gi.require_version("Atspi", "2.0")
+        from gi.repository import Atspi
+    except Exception:
+        return None
+    Atspi.set_timeout(500, 2000)  # a hung app must not hang the shortcut
+    return Atspi
+
+
+def atspi_frames(Atspi, pid):
+    """The window frames of process pid on the accessibility bus; the
+    active one first. Empty if the app isn't on the bus."""
+    desktop = Atspi.get_desktop(0)
+    for i in range(desktop.get_child_count()):
+        app = desktop.get_child_at_index(i)
+        try:
+            if app is None or app.get_process_id() != pid:
+                continue
+            frames = [app.get_child_at_index(j) for j in range(app.get_child_count())]
+        except Exception:
+            continue
+        def active(frame):
+            try:
+                return frame.get_state_set().contains(Atspi.StateType.ACTIVE)
+            except Exception:
+                return False
+        return sorted((f for f in frames if f is not None), key=lambda f: not active(f))
+    return []
+
+
+def link_at(Atspi, frame, x, y):
+    """The link at window position (x, y). Wayland apps know positions inside
+    their own window only, so this asks with window coordinates."""
+    node = frame
+    for _ in range(48):  # down to the deepest element at the point
+        try:
+            child = node.get_accessible_at_point(x, y, Atspi.CoordType.WINDOW)
+        except Exception:
+            child = None
+        if child is None or child == node:
+            break
+        node = child
+    for _ in range(16):  # then up to the link that holds it
+        if node is None or node == frame:
+            break
+        uri = hyperlink_uri(node)
+        if uri:
+            return uri
+        try:
+            node = node.get_parent()
+        except Exception:
+            break
+    return None
+
+
+def selection_in(Atspi, frame):
+    """(known, text): the frame's selected text right now. known is False when
+    the window shows no text over the bus at all, so its answer means
+    nothing."""
+    known = False
+    stack, seen = [(frame, 0)], 0
+    while stack and seen < 4000:
+        node, depth = stack.pop()
+        seen += 1
+        try:
+            if node.get_text_iface() is not None:
+                if Atspi.Text.get_character_count(node) > 0:
+                    known = True
+                for k in range(Atspi.Text.get_n_selections(node)):
+                    r = Atspi.Text.get_selection(node, k)
+                    text = Atspi.Text.get_text(node, r.start_offset, r.end_offset).strip()
+                    if text:
+                        return True, text[:2000]
+            if depth < 40:
+                count = min(node.get_child_count(), 500)
+                stack.extend((node.get_child_at_index(i), depth + 1) for i in range(count))
+        except Exception:
+            continue
+    return known, ""
+
+
+def runtime_file(name):
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    return os.path.join(runtime, name) if runtime else None
+
+
+def ask_watcher(command, window, payload=b""):
+    """One request to pique-watch over its private socket; its reply, or None."""
+    path = runtime_file("pique-highlights")
+    if not path:
+        return None
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(0.5)
+            s.connect(path)
+            s.sendall(f"{command}\n{window}\n".encode() + payload)
+            s.shutdown(socket.SHUT_WR)
+            chunks = []
+            while chunk := s.recv(65536):
+                chunks.append(chunk)
+            return b"".join(chunks)
+    except OSError:
+        return None
+
+
+def fresh_highlight(window):
+    """The last text highlighted in this window, if it is still highlighted."""
+    if not window:
+        return ""
+    reply = ask_watcher("get", window)
+    return reply.decode("utf-8", "replace").strip() if reply else ""
+
+
+def args_for(link, text):
+    if link:
+        return [link]
+    if not text:
+        return []
+    if ADDRESS.match(text):
+        return [text]
+    return ["--prefill=" + text]
+
+
+def peek(args):
+    launch_pique(args)
+
+
+def main():
+    try:
+        under = window_under_pointer()
+    except Exception:
+        under = None
+    window = under[0].get("address") if under else None
+    if under:
+        client, x, y = under
+        if ANSWERERS.match(client.get("class", "")):
+            if answered(client, x, y):
+                return 0
+            # No answer (browser without the extension, or not restarted
+            # yet): fall through to the buffer.
+        else:
+            Atspi = atspi()
+            frames = atspi_frames(Atspi, client["pid"]) if Atspi else []
+            if frames:
+                link = link_at(Atspi, frames[0], x, y)
+                known, text = selection_in(Atspi, frames[0])
+                if link or known:
+                    peek(args_for(link, text))
+                    return 0
+    peek(args_for(None, fresh_highlight(window)))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

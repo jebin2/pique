@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "pique",
+  "version": "2.2",
+  "description": "Peek links and selected text in pique (Alt+Shift+click, Super+Shift+L, Super+Shift+click).",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAmFeUX6NgSZsP3jAZ3RI3pmhs4AwiWr4dwy7t9QX6JNo3JCVrkGCH/BsgTJngthLUT5mltbkYP/xQvXCVF3hmPpKh5JAecV5CGgu46Qx2TvL6q7QF2TLe+MlBf97JDpWZ/zDbE5A8fMYtPnywqLApluYAOjZfORNtHyzKHo27t8ITSGSSOtZGsTPRSVhscD74ep4AehCKqEox8Y8RCfkRae3yqhr0yZNnDMJyman4sVhpGFIEgPZhybOO+FEt9t+mfEo9BTT7vOwWeIUUPqVD7xszNY5FDggGcmmWcCYsdv/j0yusqUfKjh4JMG2PVkEmASG7kJZ01zZTb0XD8NpmwwIDAQAB",
+  "permissions": [
+    "nativeMessaging"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "peek.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ]
+}

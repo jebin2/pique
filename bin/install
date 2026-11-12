@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+"$ROOT/bin/build"
+cd "$ROOT/pkgbuild"
+makepkg -fsi "$@"
+# The package scriptlet writes the binds as root's sudo user. Run it again as
+# the real user, then reload, so a session without SUDO_USER still gets them.
+if [ -x /usr/lib/pique/pique-hypr ]; then
+  /usr/lib/pique/pique-hypr install
+  hyprctl reload
+  hyprctl configerrors
+fi

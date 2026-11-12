@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+mkdir -p "$ROOT/build"
+cd "$ROOT/build"
+
+qmake6 "$ROOT/pique.pro"
+make -j"$(nproc)"
+cc ${CFLAGS:--O2} -Wall -Wextra ${LDFLAGS:-} -o pique-watch "$ROOT/watch/pique-watch.c"
+
+echo "Built $ROOT/build/pique and $ROOT/build/pique-watch"

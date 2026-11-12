@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+# Native messaging host for the pique browser extension. Chromium frames each
+# message with a 4-byte little-endian length. Messages, one per peek:
+#   {"url": "..."}      a link (Alt+Shift+click, or the link under the pointer)
+#   {"prefill": "..."}  text selected in the page; an address opens, other
+#                       text waits in the search bar
+#   {"empty": true}     nothing under the pointer or selected: empty peek
+# Each answer touches $XDG_RUNTIME_DIR/pique-answered, so pique-peek knows
+# the browser handled its Super chord and doesn't open a second peek.
+
+import json
+import os
+import re
+import shutil
+import socket
+import struct
+import subprocess
+import sys
+
+
+ADDRESS = re.compile(r"^(https?://|www\.)\S+$")
+
+
+def pique_program():
+    # The package's copy; a development checkout falls back to PATH.
+    if os.access("/usr/bin/pique", os.X_OK):
+        return "/usr/bin/pique"
+    return shutil.which("pique") or "pique"
+
+
+def hand_to_spare(args):
+    """A pique --standby waits hidden, already started; handing it the
+    arguments opens the peek at once. False when there is none (or another
+    launch just took it): then start pique the slow way."""
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if not runtime:
+        return False
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(1.5)
+            s.connect(os.path.join(runtime, "pique-standby"))
+            s.sendall((json.dumps(args) + "\n").encode("utf-8"))
+            return s.makefile("rb").readline().strip() == b"ok"
+    except (OSError, ValueError):
+        return False
+
+
+def launch_pique(args):
+    if hand_to_spare(args):
+        return
+    # The address or highlighted text goes in the environment, which only
+    # this user can read, not on the command line, which every account can.
+    env = dict(os.environ, PIQUE_LAUNCH=json.dumps(args))
+    subprocess.Popen([pique_program()], env=env, start_new_session=True,
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def reply(ok):
+    payload = json.dumps({"ok": ok}).encode()
+    sys.stdout.buffer.write(struct.pack("<I", len(payload)) + payload)
+    sys.stdout.buffer.flush()
+
+
+def answered():
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if not runtime or not os.path.isdir(runtime):
+        return
+    try:
+        with open(os.path.join(runtime, "pique-answered"), "w", encoding="utf-8"):
+            pass
+    except OSError:
+        pass
+
+
+def peek_args(message):
+    """pique's arguments for one message, or None if it is not valid."""
+    if not isinstance(message, dict):
+        return None
+    if message.get("empty") is True:
+        return []
+    text = message.get("prefill")
+    if isinstance(text, str):
+        text = text.strip()[:2000]
+        if not text:
+            return []
+        if ADDRESS.match(text):
+            return [text]
+        return ["--prefill=" + text]
+    url = message.get("url")
+    if not isinstance(url, str):
+        return None
+    url = url.strip()
+    if len(url) > 8192 or any(c.isspace() for c in url):
+        return None
+    if not url.startswith(("http://", "https://")):
+        return None
+    return [url]
+
+
+def handle(message):
+    args = peek_args(message)
+    if args is None:
+        return False
+    answered()
+    launch_pique(args)
+    return True
+
+
+def read_message():
+    raw = sys.stdin.buffer.read(4)
+    if len(raw) < 4:
+        return None
+    length = struct.unpack("<I", raw)[0]
+    if length > 1024 * 1024:
+        return None
+    body = sys.stdin.buffer.read(length)
+    if len(body) < length:
+        return None
+    return json.loads(body or b"{}")
+
+
+def main():
+    while True:
+        try:
+            message = read_message()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            reply(False)
+            continue
+        if message is None:
+            return 0
+        reply(handle(message))
+
+
+if __name__ == "__main__":
+    sys.exit(main())

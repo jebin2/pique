@@ -1,0 +1,276 @@
+#!/bin/sh
+# Writes and removes pique's Hyprland binds. The marked block is the package's;
+# install replaces it, and uninstall deletes it, leaving the rest of the file.
+set -eu
+
+# Pacman runs this through sudo -u, without the session's environment.
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+
+# The hidden spare runs the old binary: let it quit (open peeks stay). The
+# Hyprland block starts a new one when it reloads, or the next peek does.
+# The highlight watcher; the next config load starts the new one.
+stop_watcher() {
+  pkill -u "$(id -u)" -x pique-watch 2>/dev/null || true
+  # Older versions: the watcher in pique-peek.
+  pkill -u "$(id -u)" -f 'pique-peek --watch-selection' 2>/dev/null || true
+  pkill -u "$(id -u)" -f 'wl-paste --primary --watch .*pique' 2>/dev/null || true
+}
+
+stop_spare() {
+  if [ -x /usr/bin/pique ]; then
+    /usr/bin/pique --stop-standby >/dev/null 2>&1 || true
+  fi
+}
+
+cmd="${1:-install}"
+dir="${PIQUE_HYPR_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/hypr}"
+
+bindings="$dir/bindings.lua"
+windows="$dir/hyprland.lua"
+shortcuts="${XDG_CONFIG_HOME:-$HOME/.config}/pique/shortcuts"
+
+default_key="SUPER + SHIFT + L"
+default_click="SUPER + SHIFT + mouse:272"
+
+ensure_shortcuts() {
+  mkdir -p "$(dirname "$shortcuts")"
+  if [ -f "$shortcuts" ]; then
+    return 0
+  fi
+  cat > "$shortcuts" <<EOF
+# Change either chord, then run: pique-hypr install
+# The click chord needs mouse:272 for the left button.
+key=$default_key
+click=$default_click
+EOF
+}
+
+read_setting() {
+  key="$1"
+  fallback="$2"
+  value="$(sed -n "s/^${key}=//p" "$shortcuts" | head -n 1)"
+  if [ -z "$value" ]; then
+    value="$fallback"
+  fi
+  case "$value" in
+    *\"*|*\\*|*\$*|*\`*)
+      echo "pique-hypr: ${key} in $shortcuts has a character Hyprland cannot quote" >&2
+      exit 1
+      ;;
+  esac
+  printf '%s' "$value"
+}
+
+# A plain bind, also for the click: { mouse = true } is Hyprland's drag bind
+# (Super+drag moves windows), which runs drag actions, not commands.
+bind_line() {
+  printf 'o.bind("%s", "Peek link, selection, or search", "/usr/bin/pique-peek")\n' "$1"
+}
+
+# Terminals keep the highlighted-text buffer after you click to unhighlight.
+# The watcher keeps each window's last highlight in memory and lists those
+# windows in $XDG_RUNTIME_DIR/pique-primary; a plain click in a listed window
+# tells it to forget that one. The click still reaches the window (non_consuming).
+selection_lines() {
+  cat <<'LUA'
+-- Helpers that run in the background: the highlight watcher, and one
+-- hidden pique waiting so a peek opens at once. Each exits if one already runs.
+local function pique_background()
+  hl.exec_cmd("/usr/lib/pique/pique-watch")
+  hl.exec_cmd("/usr/bin/pique --standby")
+end
+hl.on("hyprland.start", pique_background)
+pique_background()
+hl.bind("mouse:272", function()
+  local note = (os.getenv("XDG_RUNTIME_DIR") or "") .. "/pique-primary"
+  local f = io.open(note, "r")
+  if not f then return end
+  local owners = {}
+  for line in f:lines() do owners[line] = true end
+  f:close()
+  if next(owners) == nil then return end
+  local c = hl.get_cursor_pos()
+  local shown = {}
+  for _, m in ipairs(hl.get_monitors()) do
+    if m.active_workspace then shown[m.active_workspace.id] = true end
+    if m.active_special_workspace then shown[m.active_special_workspace.id] = true end
+  end
+  local best
+  for _, w in ipairs(hl.get_windows()) do
+    if w.mapped and not w.hidden and w.workspace and shown[w.workspace.id]
+       and c.x >= w.at.x and c.x < w.at.x + w.size.x and c.y >= w.at.y and c.y < w.at.y + w.size.y
+       and (not best or (w.floating and not best.floating)
+            or (w.floating == best.floating and w.focus_history_id < best.focus_history_id)) then
+      best = w
+    end
+  end
+  if best and owners[best.address] and best.address:match("^0x%x+$") then
+    hl.exec_cmd("/usr/lib/pique/pique-watch --forget " .. best.address)
+  end
+end, { non_consuming = true })
+LUA
+}
+
+window_block='-- BEGIN pique
+-- A peek is a floating window. Wayland clients cannot float themselves.
+-- The icon overlay is a second frameless window parked above the page.
+o.window("^pique$", { float = true })
+o.window({ class = "^pique$", title = "^pique-tools$" }, { float = true, border_size = 0, no_shadow = true, no_blur = true, allows_input = true, no_initial_focus = true, focus_on_activate = false, animation = "none" })
+-- END pique'
+
+strip_block() {
+  awk '
+    /^-- BEGIN pique$/ { skip = 1; next }
+    /^-- END pique$/ { skip = 0; next }
+    skip != 1 { print }
+  ' "$1" | awk '
+    { line[NR] = $0 }
+    END {
+      n = NR
+      while (n > 0 && line[n] ~ /^[[:space:]]*$/) n--
+      for (i = 1; i <= n; i++) print line[i]
+    }
+  '
+}
+
+write_file() {
+  block="$2"
+  mkdir -p "$dir"
+  # A symlinked config (dotfiles) is edited where it points, not replaced.
+  file="$(readlink -f -- "$1")"
+  tmp="$(mktemp "$(dirname -- "$file")/.pique-hypr.XXXXXX")"
+  if [ -f "$file" ]; then
+    strip_block "$file" > "$tmp"
+  else
+    : > "$tmp"
+  fi
+  # Keep a blank line between the user'\''s config and the package block.
+  if [ -s "$tmp" ]; then
+    printf '\n%s\n' "$block" >> "$tmp"
+  else
+    printf '%s\n' "$block" > "$tmp"
+  fi
+  mv "$tmp" "$file"
+}
+
+remove_block() {
+  [ -f "$1" ] || return 0
+  file="$(readlink -f -- "$1")"
+  tmp="$(mktemp "$(dirname -- "$file")/.pique-hypr.XXXXXX")"
+  strip_block "$file" > "$tmp"
+  mv "$tmp" "$file"
+}
+
+# In a browser, Alt+Shift+click on a link reaches the page, so a small
+# extension peeks it there. It is loaded with --load-extension from the
+# browser's flags file and talks to pique-peek-host over native messaging.
+config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+extension_dest="$data_home/pique/extension"
+extension_id="jaiopegjcdgmpkjkojdjlldapcfddhif"
+script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+# "binary flags-file native-hosts-dir" for each supported browser.
+browsers="brave $config_home/brave-flags.conf $config_home/BraveSoftware/Brave-Browser/NativeMessagingHosts
+chromium $config_home/chromium-flags.conf $config_home/chromium/NativeMessagingHosts"
+
+extension_source() {
+  if [ "$script_dir" = /usr/lib/pique ] && [ -f /usr/share/pique/extension/manifest.json ]; then
+    printf '%s' /usr/share/pique/extension
+  elif [ -f "$script_dir/../browser/manifest.json" ]; then
+    printf '%s' "$script_dir/../browser"
+  elif [ -f /usr/share/pique/extension/manifest.json ]; then
+    printf '%s' /usr/share/pique/extension
+  fi
+}
+
+host_program() {
+  if [ -x /usr/bin/pique-peek-host ]; then
+    printf '%s' /usr/bin/pique-peek-host
+  else
+    printf '%s' "$(CDPATH= cd -- "$script_dir/.." && pwd)/bin/pique-peek-host"
+  fi
+}
+
+add_flag() {  # add_flag FLAGS_FILE
+  flags_file="$1"
+  touch "$flags_file"
+  if grep -q -F -- "--load-extension=" "$flags_file"; then
+    if ! grep -q -F -- "$extension_dest" "$flags_file"; then
+      sed -i --follow-symlinks "s|^--load-extension=\(.*\)|--load-extension=\1,${extension_dest}|" "$flags_file"
+    fi
+  else
+    printf '\n--load-extension=%s\n' "$extension_dest" >> "$flags_file"
+  fi
+}
+
+remove_flag() {  # remove_flag FLAGS_FILE
+  flags_file="$1"
+  [ -f "$flags_file" ] || return 0
+  sed -i --follow-symlinks "s|,${extension_dest}||g; s|${extension_dest},||g; s|--load-extension=${extension_dest}\$||" "$flags_file"
+  sed -i --follow-symlinks '/^--load-extension=$/d' "$flags_file"
+}
+
+host_manifest() {  # host_manifest HOST_BIN
+  printf '{\n  "name": "com.pique.peek",\n  "description": "Peek an Alt+Shift+clicked link in pique",\n  "path": "%s",\n  "type": "stdio",\n  "allowed_origins": [\n    "chrome-extension://%s/"\n  ]\n}\n' "$1" "$extension_id"
+}
+
+install_browser() {
+  src="$(extension_source)"
+  if [ -z "$src" ]; then
+    echo "pique-hypr: no browser extension to install" >&2
+    return 0
+  fi
+  mkdir -p "$extension_dest"
+  cp -f "$src/manifest.json" "$src/peek.js" "$src/background.js" "$extension_dest/"
+  host_bin="$(host_program)"
+  printf '%s\n' "$browsers" | while read -r binary flags_file host_dir; do
+    # Only browsers that are installed here.
+    command -v "$binary" >/dev/null 2>&1 || continue
+    mkdir -p "$host_dir"
+    host_manifest "$host_bin" > "$host_dir/com.pique.peek.json"
+    add_flag "$flags_file"
+  done
+}
+
+remove_browser() {
+  printf '%s\n' "$browsers" | while read -r binary flags_file host_dir; do
+    remove_flag "$flags_file"
+    rm -f "$host_dir/com.pique.peek.json"
+  done
+  rm -rf "$extension_dest"
+}
+
+case "$cmd" in
+  install)
+    ensure_shortcuts
+    key_chord="$(read_setting key "$default_key")"
+    click_chord="$(read_setting click "$default_click")"
+    bind_block="$(printf '%s\n' \
+      "-- BEGIN pique" \
+      "-- Shortcuts come from ${shortcuts}. Edit that file, then run pique-hypr install." \
+      "$(bind_line "$key_chord")" \
+      "$(bind_line "$click_chord")" \
+      "$(selection_lines)" \
+      "-- END pique")"
+    stop_spare
+    stop_watcher
+    write_file "$bindings" "$bind_block"
+    write_file "$windows" "$window_block"
+    install_browser
+    ;;
+  remove)
+    remove_block "$bindings"
+    # The watcher started by the removed block; it would otherwise run until logout.
+    stop_watcher
+    stop_spare
+    runtime="$XDG_RUNTIME_DIR"
+    rm -f "$runtime/pique-standby" "$runtime/pique-standby.lock" "$runtime/pique-primary" "$runtime/pique-primary.tmp" "$runtime/pique-watch.lock" "$runtime/pique-highlights" "$runtime/pique-seen-selection"
+    remove_block "$windows"
+    remove_browser
+    ;;
+  *)
+    echo "usage: pique-hypr install|remove" >&2
+    exit 1
+    ;;
+esac

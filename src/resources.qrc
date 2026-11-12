@@ -1,0 +1,12 @@
+<RCC>
+    <qresource prefix="/">
+        <file alias="Main.qml">Main.qml</file>
+        <file alias="PeekLayer.qml">PeekLayer.qml</file>
+        <file alias="i18n/da.json">i18n/da.json</file>
+        <file alias="icons/reader.svg">icons/reader.svg</file>
+        <file alias="icons/copy.svg">icons/copy.svg</file>
+        <file alias="icons/keep.svg">icons/keep.svg</file>
+        <file alias="icons/tile.svg">icons/tile.svg</file>
+        <file alias="icons/close.svg">icons/close.svg</file>
+    </qresource>
+</RCC>

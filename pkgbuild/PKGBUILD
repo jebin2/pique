@@ -1,0 +1,31 @@
+pkgname=pique
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='The peek browser: look at a link without paying for it with a tab'
+arch=('x86_64' 'aarch64')
+license=('MIT')
+depends=('qt6-base' 'qt6-declarative' 'qt6-wayland' 'qt6-webengine' 'wl-clipboard')
+makedepends=('gcc' 'make')
+install=pique.install
+source=()
+sha256sums=()
+
+build() {
+  cd "$startdir/.."
+  ./bin/build
+}
+
+package() {
+  cd "$startdir/.."
+  install -Dm755 build/pique "$pkgdir/usr/bin/pique"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 "$startdir/pique.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/pique.svg"
+  install -Dm644 "$startdir/pique.desktop" "$pkgdir/usr/share/applications/pique.desktop"
+  install -Dm755 "$startdir/pique-hypr" "$pkgdir/usr/lib/pique/pique-hypr"
+  install -Dm755 build/pique-watch "$pkgdir/usr/lib/pique/pique-watch"
+  install -Dm755 "$startdir/../bin/pique-peek" "$pkgdir/usr/bin/pique-peek"
+  install -Dm755 "$startdir/../bin/pique-peek-host" "$pkgdir/usr/bin/pique-peek-host"
+  install -Dm644 "$startdir/../browser/manifest.json" "$pkgdir/usr/share/pique/extension/manifest.json"
+  install -Dm644 "$startdir/../browser/peek.js" "$pkgdir/usr/share/pique/extension/peek.js"
+  install -Dm644 "$startdir/../browser/background.js" "$pkgdir/usr/share/pique/extension/background.js"
+}

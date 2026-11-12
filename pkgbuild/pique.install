@@ -1,0 +1,26 @@
+# Pacman runs these as root. The Hyprland files belong to the user who invoked sudo.
+
+_pique_as_user() {
+  local user="${SUDO_USER:-}"
+  local home
+  if [ -z "$user" ] || [ "$user" = root ]; then
+    return 0
+  fi
+  home="$(getent passwd "$user" | cut -d: -f6)"
+  if [ -z "$home" ] || [ ! -x /usr/lib/pique/pique-hypr ]; then
+    return 0
+  fi
+  sudo -u "$user" -- env HOME="$home" /usr/lib/pique/pique-hypr "$1"
+}
+
+post_install() {
+  _pique_as_user install
+}
+
+post_upgrade() {
+  _pique_as_user install
+}
+
+pre_remove() {
+  _pique_as_user remove
+}
