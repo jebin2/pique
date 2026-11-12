@@ -16,9 +16,12 @@ pique brings that to Hyprland as one small floating window:
 
 On Omarchy (or any Arch system running Hyprland), install the release package:
 
-    sudo pacman -U https://github.com/jebin2/pique/releases/download/v0.1.0/pique-0.1.0-1-x86_64.pkg.tar.zst
+    curl -LO https://github.com/jebin2/pique/releases/download/v0.1.0/pique-0.1.0-1-x86_64.pkg.tar.zst
+    sudo pacman -U pique-0.1.0-1-x86_64.pkg.tar.zst
 
-pacman pulls in the Qt libraries it needs from the Arch repositories.
+pacman pulls in the Qt libraries it needs from the Arch repositories. (Download
+first: pacman wants a signature for packages it fetches from a URL itself.) The
+release page lists the file's SHA-256, to check with `sha256sum` before installing.
 
 Or build that same release from source yourself:
 
