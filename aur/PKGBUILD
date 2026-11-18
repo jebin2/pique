@@ -1,6 +1,6 @@
 # Maintainer: Jebin Einstein <jebineinstein at gmail dot com>
 pkgname=pique
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=1
 pkgdesc='The peek browser for Omarchy and Hyprland: look at a link without paying for it with a tab'
 arch=('x86_64' 'aarch64')
@@ -12,7 +12,7 @@ optdepends=('python-gobject: peek links and selections in GTK and Qt apps (acces
             'at-spi2-core: peek links and selections in GTK and Qt apps (accessibility bus)')
 install=pique.install
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('354411950f8ef847d4694ec39c3ca1a4778427f3930a0cc11caad4fa9d0e0968')
+sha256sums=('7c314b9ad47e934570b3d6199e61e9308cf63772bf71a068236cb19f48d6a22b')
 
 build() {
   cd "$pkgname-$pkgver"

@@ -1,6 +1,6 @@
 pkgbase = pique
 	pkgdesc = The peek browser for Omarchy and Hyprland: look at a link without paying for it with a tab
-	pkgver = 0.1.0
+	pkgver = 0.1.1
 	pkgrel = 1
 	url = https://github.com/jebin2/pique
 	install = pique.install
@@ -19,7 +19,7 @@ pkgbase = pique
 	depends = gcc-libs
 	optdepends = python-gobject: peek links and selections in GTK and Qt apps (accessibility bus)
 	optdepends = at-spi2-core: peek links and selections in GTK and Qt apps (accessibility bus)
-	source = pique-0.1.0.tar.gz::https://github.com/jebin2/pique/archive/refs/tags/v0.1.0.tar.gz
-	sha256sums = 354411950f8ef847d4694ec39c3ca1a4778427f3930a0cc11caad4fa9d0e0968
+	source = pique-0.1.1.tar.gz::https://github.com/jebin2/pique/archive/refs/tags/v0.1.1.tar.gz
+	sha256sums = 7c314b9ad47e934570b3d6199e61e9308cf63772bf71a068236cb19f48d6a22b
 
 pkgname = pique
