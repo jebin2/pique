@@ -41,6 +41,10 @@ public:
     static void ensureSpare();
     // Asks the kernel to swap out this whole process (MADV_PAGEOUT).
     static void pageOut();
+    // False when $WAYLAND_DISPLAY names a socket nobody is listening on yet
+    // (the compositor is still starting). Qt aborts in that case, so a spare
+    // checks first and exits quietly. True when Wayland is not in use.
+    static bool displayReady();
 
     // Only one spare at a time: false if another one holds the lock.
     bool takeLock();

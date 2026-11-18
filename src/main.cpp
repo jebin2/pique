@@ -39,12 +39,20 @@ int main(int argc, char *argv[]) {
         return 0;
     }
     if (launch.version) {
-        qInfo("pique 0.1.0");
+        qInfo("pique 0.1.1");
         return 0;
     }
     if (launch.stopStandby) {
         QCoreApplication app(argc, argv);
         Standby::stopSpare();
+        return 0;
+    }
+    // A spare started while the compositor is still coming up (Hyprland runs
+    // its config, and so our exec, before its socket listens) would make Qt
+    // abort and dump core. Exit quietly: the hyprland.start hook starts the
+    // real one a moment later.
+    if (launch.standby && !Standby::displayReady()) {
+        qInfo("pique: display not ready yet, spare not started");
         return 0;
     }
     // Before anything slow: a second spare exits at once.
@@ -55,7 +63,7 @@ int main(int argc, char *argv[]) {
     QtWebEngineQuick::initialize();
     QGuiApplication app(argc, argv);
     app.setApplicationName("pique");
-    app.setApplicationVersion("0.1.0");
+    app.setApplicationVersion("0.1.1");
 
     // Matches the window to pique.desktop, so the compositor (Wayland app_id)
     // and the launcher pick up the installed icon.

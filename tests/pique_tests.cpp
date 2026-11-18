@@ -2,6 +2,7 @@
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLocalServer>
 #include <QGuiApplication>
 #include <QClipboard>
 #include <QSignalSpy>
@@ -55,6 +56,28 @@ private slots:
         QVERIFY(Standby::parse({QStringLiteral("--stop-standby")}).stopStandby);
         // Unknown flags are not addresses.
         QVERIFY(Standby::parse({QStringLiteral("--whatever")}).url.isEmpty());
+    }
+
+    void spareWaitsForTheDisplay() {
+        const QByteArray saved = qgetenv("WAYLAND_DISPLAY");
+        const QByteArray savedPlatform = qgetenv("QT_QPA_PLATFORM");
+        qunsetenv("QT_QPA_PLATFORM");
+        QTemporaryDir dir;
+        const QString socketPath = dir.filePath("wayland-test");
+        // Compositor not listening yet: not ready.
+        qputenv("WAYLAND_DISPLAY", QFile::encodeName(socketPath));
+        QVERIFY(!Standby::displayReady());
+        // Listening: ready.
+        QLocalServer server;
+        QVERIFY(server.listen(socketPath));
+        QVERIFY(Standby::displayReady());
+        server.close();
+        // Not a Wayland session: left to Qt.
+        qunsetenv("WAYLAND_DISPLAY");
+        QVERIFY(Standby::displayReady());
+        qputenv("WAYLAND_DISPLAY", saved);
+        if (!savedPlatform.isEmpty())
+            qputenv("QT_QPA_PLATFORM", savedPlatform);
     }
 
     void peekArgsPickLinkThenSelection() {

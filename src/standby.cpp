@@ -12,8 +12,11 @@
 #include <QLocalSocket>
 #include <QProcess>
 
+#include <cstring>
 #include <fcntl.h>
 #include <sys/file.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 namespace {
@@ -119,6 +122,33 @@ void Standby::pageOut() {
         if (okFrom && okTo && to > from)
             ::madvise(reinterpret_cast<void *>(from), to - from, MADV_PAGEOUT);
     }
+}
+
+bool Standby::displayReady() {
+    const QByteArray platform = qgetenv("QT_QPA_PLATFORM");
+    if (!platform.isEmpty() && !platform.startsWith("wayland"))
+        return true;
+    const QByteArray display = qgetenv("WAYLAND_DISPLAY");
+    if (display.isEmpty())
+        return true;  // not a Wayland session: let Qt decide
+    QByteArray socketPath = display;
+    if (!display.startsWith('/')) {
+        const QByteArray runtime = qgetenv("XDG_RUNTIME_DIR");
+        if (runtime.isEmpty())
+            return true;
+        socketPath = runtime + '/' + display;
+    }
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    if (socketPath.size() >= qsizetype(sizeof(address.sun_path)))
+        return true;
+    std::memcpy(address.sun_path, socketPath.constData(), socketPath.size());
+    const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd < 0)
+        return true;
+    const bool ready = ::connect(fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) == 0;
+    ::close(fd);
+    return ready;
 }
 
 void Standby::ensureSpare() {
